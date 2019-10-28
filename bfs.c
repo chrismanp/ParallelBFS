@@ -77,10 +77,59 @@ void pincore(int threadId){
     waitbarrier(&barrierCnt);
 }
 
-void bfswrapper(int * vertOffset, int * edgeArr, int n, int m, int nthreads){
+void bfsexplore(int * vertOffset, int * edgeArr, int n, int m, int nthreads){
     int u = 0;
     int start, end =0;
+    
+    int cqlocal = __sync_fetch_and_sub(&cqhead, 1);
+    cqlocal--;
+    while( cqlocal+1 > 0){        
+        u = CQ[cqlocal];
+            
+        if(isVisited[u] == 1) {
+            cqlocal = __sync_fetch_and_sub(&cqhead, 1);
+            cqlocal--;
+            continue;
+        }
 
+        //printf("[%d] Parent node u : %d index :%d\n", threadId, u, cqlocal);
+        start = vertOffset[u];
+        if ( u < n-1) {
+            end = vertOffset[u+1];
+        } else {
+            end = m;
+        }
+            
+        for(int i = start; i<end; i++){            
+            int v = edgeArr[i];                
+            if (!isVisited[v] && !isEntered[v] ) {
+                isEntered[v] = 1;
+   
+
+                int nqlocal = __sync_fetch_and_add(&nqhead, 1);
+                NQ[nqlocal] = v;
+                    
+                parentArr[v] = u;
+                distanceArr[v] = distanceArr[u]+1;
+
+                assert(v < n);
+                assert(u < n);
+                assert(nqlocal < n);
+  
+
+                //printf("[%d] Node visited : %d\n", threadId, v);
+            } else {
+                //printf("[%d] Node ignored : %d\n", threadId, v);
+            }
+        }
+        isVisited[u] = 1;
+        cqlocal = __sync_fetch_and_sub(&cqhead, 1);
+        cqlocal--;
+    }
+}
+
+void mainbfs(int * vertOffset, int * edgeArr, int n, int m, int nthreads){
+    
     int init = 0;
     int activatelvl = 0;
    
@@ -95,54 +144,9 @@ void bfswrapper(int * vertOffset, int * edgeArr, int n, int m, int nthreads){
             pthread_barrier_wait(&barrierLvl2);
             activatelvl = 0;
         }
-        int cqlocal = __sync_fetch_and_sub(&cqhead, 1);
-        cqlocal--;
-        while( cqlocal+1 > 0){        
-            u = CQ[cqlocal];
-            
-            if(isVisited[u]) {
-                cqlocal = __sync_fetch_and_sub(&cqhead, 1);
-                cqlocal--;
-                continue;
-            }
 
-            //printf("[%d] Parent node u : %d index :%d\n", 0, u, cqlocal);
-            start = vertOffset[u];
-            if ( u < n-1) {
-                end = vertOffset[u+1];
-            } else {
-                end = m;
-            }
-            
-            for(int i = start; i<end; i++){            
-
-                int v = edgeArr[i];                
-                if (!isVisited[v] && !isEntered[v])  {
-                    isEntered[v] = 1;
-   
-                    int nqlocal = __sync_fetch_and_add(&nqhead, 1);
-                    NQ[nqlocal] = v;
-                    
-                    parentArr[v] = u;
-                    distanceArr[v] = distanceArr[u]+1;
-
-
-                    assert(v < n);
-                    assert(u < n);
-                    assert(nqlocal < n);
-                    //printf("[%d] Node visited : %d\n", 0, v);
-                } else {
-                    //printf("[%d] Node ignored : %d\n", 0, v);
-                }
-            }
-            isVisited[u] = 1;
-            cqlocal = __sync_fetch_and_sub(&cqhead, 1);
-            cqlocal--;
-            //printf("cqhead : %d cqlocal : %d\n", cqhead, cqlocal);
-        }
-
-        //printf("Wait notDone : %d ThreadId: %d\n", notDone, 0);        
-        
+        bfsexplore(vertOffset, edgeArr, n, m, 0);
+      
         pthread_barrier_wait(&barrierLvl);
 
         int * tmp = CQ;
@@ -161,57 +165,15 @@ void bfswrapper(int * vertOffset, int * edgeArr, int n, int m, int nthreads){
 
 
 void bfsworker(int * vertOffset, int * edgeArr, int n, int m, int threadId){
-    int u = 0;
-    int start, end =0;
     
     //printf("[%d] Waiting for job\n", threadId);
     pthread_barrier_wait(&barrierInit);
 
     //printf("[%d] Enter main thread\n", threadId);
     while (notDone ){
-
-
-        int cqlocal = __sync_fetch_and_sub(&cqhead, 1);
-        cqlocal--;
-        while( cqlocal+1 > 0){        
-            u = CQ[cqlocal];
-            
-            if(isVisited[u] == 1) {
-                cqlocal = __sync_fetch_and_sub(&cqhead, 1);
-                cqlocal--;
-                continue;
-            }
-
-            //printf("[%d] Parent node u : %d index :%d\n", threadId, u, cqlocal);
-            start = vertOffset[u];
-            if ( u < n-1) {
-                end = vertOffset[u+1];
-            } else {
-                end = m;
-            }
-            
-            for(int i = start; i<end; i++){            
-                int v = edgeArr[i];                
-                if (!isVisited[v] && !isEntered[v] ) {
-                    isEntered[v] = 1;
-   
-
-                    int nqlocal = __sync_fetch_and_add(&nqhead, 1);
-                    NQ[nqlocal] = v;
-                    
-                    parentArr[v] = u;
-                    distanceArr[v] = distanceArr[u]+1;
-                    //printf("[%d] Node visited : %d\n", threadId, v);
-                } else {
-                    //printf("[%d] Node ignored : %d\n", threadId, v);
-                }
-            }
-            isVisited[u] = 1;
-            cqlocal = __sync_fetch_and_sub(&cqhead, 1);
-            cqlocal--;
-        }
-        //printf("Wait notDone : %d ThreadId: %d\n", notDone, threadId) 
-
+        
+        bfsexplore(vertOffset, edgeArr, n, m, threadId);
+        
         // The first barrier is to ensure that we get final value of nqhead and cqhead
         pthread_barrier_wait(&barrierLvl);
         // The last barrier is to ensure that CQ  and NQ are swapped and cqhead and nqhead are swapped before starting a wrok
@@ -260,7 +222,7 @@ void parallelbfs(int * vertOffset, int * edgeArr, int n, int m, int nthreads ) {
     CQ[cqhead] = 0;
     cqhead++;
     
-    bfswrapper(vertOffset, edgeArr, n, m, nthreads);
+    mainbfs(vertOffset, edgeArr, n, m, nthreads);
 
 
 }
