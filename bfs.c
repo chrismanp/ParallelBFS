@@ -7,6 +7,12 @@
 #include <limits.h>
 #include <pthread.h>
 
+#define SET(bitVector, location) ( bitVector[location/8] = bitVector[location/8] | ((char) 1 << (location % 8) ) )
+
+#define CLEAR(bitVector, location) ( bitVector[location/8] = bitVector[location/8] & !((char) 1 << (location % 8) ) )
+
+#define GET(bitVector, location) ( ( bitVector[location/8] >> (location % 8) ) & 0x1  ) 
+
 // Next and Current level queue
 typedef struct _thread_datastructure {
     int id;
@@ -30,6 +36,7 @@ int cqtail = 0;
 int * parentArr = NULL;
 char * isVisited = NULL;
 char * isEntered = NULL;
+
 int * distanceArr = NULL;
 
 // Barrier
@@ -92,8 +99,8 @@ void bfswrapper(int * vertOffset, int * edgeArr, int n, int m, int nthreads){
         cqlocal--;
         while( cqlocal+1 > 0){        
             u = CQ[cqlocal];
-
-            if(isVisited[u] == 1) {
+            
+            if(isVisited[u]) {
                 cqlocal = __sync_fetch_and_sub(&cqhead, 1);
                 cqlocal--;
                 continue;
@@ -110,10 +117,9 @@ void bfswrapper(int * vertOffset, int * edgeArr, int n, int m, int nthreads){
             for(int i = start; i<end; i++){            
 
                 int v = edgeArr[i];                
-                if (isVisited[v] == 0 && isEntered[v] == 0)  {
+                if (!isVisited[v] && !isEntered[v])  {
                     isEntered[v] = 1;
-                    
-
+   
                     int nqlocal = __sync_fetch_and_add(&nqhead, 1);
                     NQ[nqlocal] = v;
                     
@@ -135,12 +141,9 @@ void bfswrapper(int * vertOffset, int * edgeArr, int n, int m, int nthreads){
             //printf("cqhead : %d cqlocal : %d\n", cqhead, cqlocal);
         }
 
-
-        // Sync'ed
         //printf("Wait notDone : %d ThreadId: %d\n", notDone, 0);        
         
         pthread_barrier_wait(&barrierLvl);
-
 
         int * tmp = CQ;
         CQ = NQ;
@@ -172,7 +175,7 @@ void bfsworker(int * vertOffset, int * edgeArr, int n, int m, int threadId){
         cqlocal--;
         while( cqlocal+1 > 0){        
             u = CQ[cqlocal];
-
+            
             if(isVisited[u] == 1) {
                 cqlocal = __sync_fetch_and_sub(&cqhead, 1);
                 cqlocal--;
@@ -189,9 +192,10 @@ void bfsworker(int * vertOffset, int * edgeArr, int n, int m, int threadId){
             
             for(int i = start; i<end; i++){            
                 int v = edgeArr[i];                
-                if (isVisited[v] == 0 && isEntered[v] == 0) {
+                if (!isVisited[v] && !isEntered[v] ) {
                     isEntered[v] = 1;
-                    
+   
+
                     int nqlocal = __sync_fetch_and_add(&nqhead, 1);
                     NQ[nqlocal] = v;
                     
@@ -206,9 +210,11 @@ void bfsworker(int * vertOffset, int * edgeArr, int n, int m, int threadId){
             cqlocal = __sync_fetch_and_sub(&cqhead, 1);
             cqlocal--;
         }
-        //printf("Wait notDone : %d ThreadId: %d\n", notDone, threadId);
-        
+        //printf("Wait notDone : %d ThreadId: %d\n", notDone, threadId) 
+
+        // The first barrier is to ensure that we get final value of nqhead and cqhead
         pthread_barrier_wait(&barrierLvl);
+        // The last barrier is to ensure that CQ  and NQ are swapped and cqhead and nqhead are swapped before starting a wrok
         pthread_barrier_wait(&barrierLvl2);
     }
     
@@ -235,17 +241,19 @@ void parallelbfs(int * vertOffset, int * edgeArr, int n, int m, int nthreads ) {
     parentArr = calloc(n, sizeof(int));
     isVisited = calloc(n, sizeof(char));
     isEntered = calloc(n, sizeof(char));
+    
+    //int rem = n % 8;
+    //int nBytesAlloc = n/8 + !!rem;
+    
     distanceArr = calloc(n, sizeof(int));
     CQ = calloc(n, sizeof(int));
     NQ = calloc(n, sizeof(int));
-
-    for (int i =0; i<n; i++){
-        parentArr[i] = INT_MAX;
-        isVisited[i] = 0;
-        isEntered[i] = 0;
-        distanceArr[i] = INT_MAX;
-    }
     
+    memset(parentArr, INT_MAX, n * sizeof(int));
+    memset(distanceArr, INT_MAX, n * sizeof(int));
+    memset(isVisited, 0, n * sizeof(char));
+    memset(isEntered, 0, n * sizeof(char));
+
     parentArr[0] = 0;
     distanceArr[0] = 0;
 
@@ -357,10 +365,20 @@ int main ( int argc, char * argv[]){
     }
     pincore(0);
     
+    // Time here
+    struct timespec start, end; 
+    
+    clock_gettime(CLOCK_MONOTONIC, &start);
     parallelbfs(vertOffset, edgeArr, n, m, nthreads);    
+    clock_gettime(CLOCK_MONOTONIC, &end);
+
+    double time_taken; 
+    time_taken = (end.tv_sec - start.tv_sec) * 1e9; 
+    time_taken = (time_taken + (end.tv_nsec - start.tv_nsec)) * 1e-9; 
+ 
+
     notDone = 0;   
     pthread_barrier_wait(&barrierLvl2);
-
 
     //printf("Main thread. notDone :  %d\n", notDone);
     for (int i=1; i<nthreads; i++){
@@ -369,8 +387,11 @@ int main ( int argc, char * argv[]){
 
     
     for (int i = 0; i<n; i++) {
-        printf ("Node : %d. Distance : %d Parent : %d\n", i, distanceArr[i], parentArr[i]);
+        //printf ("Node : %d. Distance : %d Parent : %d\n", i, distanceArr[i], parentArr[i]);
+        printf ("Node : %d. Distance : %d\n", i, distanceArr[i]);
     }
+
+    printf("Time taken : %0.9lf s\n", time_taken);
 
     if(NQ) free(NQ);
     if(CQ) free(CQ);
@@ -380,6 +401,7 @@ int main ( int argc, char * argv[]){
     if (distanceArr) free(distanceArr);
     if (isVisited) free(isVisited);
     if (isEntered) free(isEntered);
+
     if (parentArr) free(parentArr);
     
     free(vertOffset);
