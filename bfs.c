@@ -34,8 +34,9 @@ int * distanceArr = NULL;
 // Barrier
 int barrierCnt;
 pthread_mutex_t barrierMutex;
+#if 0
 pthread_mutex_t queueMutex;
-
+#endif
 pthread_barrier_t barrierInit;
 pthread_barrier_t barrierLvl;
 pthread_barrier_t barrierLvl2;
@@ -88,19 +89,27 @@ void bfswrapper(int * vertOffset, int * edgeArr, int n, int m, int nthreads){
             pthread_barrier_wait(&barrierLvl2);
             activatelvl = 0;
         }
-
+#if 0
         pthread_mutex_lock(&queueMutex);
       
         while( cqhead > 0){        
             u = CQ[cqhead-1];
             cqhead--;
             pthread_mutex_unlock(&queueMutex);
+#else
+        int cqlocal = __sync_fetch_and_sub(&cqhead, 1);
+        cqlocal--;
+        while( cqlocal+1 > 0){        
+            u = CQ[cqlocal];
 
+#endif
             if(isVisited[u] == 1) {
+                cqlocal = __sync_fetch_and_sub(&cqhead, 1);
+                cqlocal--;
                 continue;
             }
 
-            printf("[%d] Parent node u : %d index :%d\n", 0, u, cqhead);
+            printf("[%d] Parent node u : %d index :%d\n", 0, u, cqlocal);
             start = vertOffset[u];
             if ( u < n-1) {
                 end = vertOffset[u+1];
@@ -113,10 +122,11 @@ void bfswrapper(int * vertOffset, int * edgeArr, int n, int m, int nthreads){
                 int v = edgeArr[i];                
                 if (isVisited[v] == 0) {
                     
-                    pthread_mutex_lock(&queueMutex);                    
-                    NQ[nqhead] = v;
-                    nqhead++;
-                    pthread_mutex_unlock(&queueMutex);
+                    //pthread_mutex_lock(&queueMutex);                    
+                    int nqlocal = __sync_fetch_and_add(&nqhead, 1);
+                    NQ[nqlocal] = v;
+                    //nqhead++;
+                    //pthread_mutex_unlock(&queueMutex);
                     
                     parentArr[v] = u;
                     distanceArr[v] = distanceArr[u]+1;
@@ -127,9 +137,15 @@ void bfswrapper(int * vertOffset, int * edgeArr, int n, int m, int nthreads){
                     printf("[%d] Node ignored : %d\n", 0, v);
                 }
             }
-            isVisited[u] = 1;            
+            isVisited[u] = 1;
+            cqlocal = __sync_fetch_and_sub(&cqhead, 1);
+            cqlocal--;
+            printf("cqhead : %d cqlocal : %d\n", cqhead, cqlocal);
         }
+
+#if 0
         pthread_mutex_unlock(&queueMutex);
+#endif
 
         // Sync'ed
         printf("Wait notDone : %d ThreadId: %d\n", notDone, 0);        
@@ -161,17 +177,27 @@ void bfsworker(int * vertOffset, int * edgeArr, int n, int m, int threadId){
 
     printf("[%d] Enter main thread\n", threadId);
     while (notDone ){
+
+#if 0
         pthread_mutex_lock(&queueMutex);
         while( cqhead > 0 ){        
             u = CQ[cqhead-1];
             cqhead--;
             pthread_mutex_unlock(&queueMutex);
+#else
+        int cqlocal = __sync_fetch_and_sub(&cqhead, 1);
+        cqlocal--;
+        while( cqlocal+1 > 0){        
+            u = CQ[cqlocal];
 
+#endif
             if(isVisited[u] == 1) {
+                cqlocal = __sync_fetch_and_sub(&cqhead, 1);
+                cqlocal--;
                 continue;
             }
 
-            printf("[%d] Parent node u : %d index :%d\n", threadId, u, cqhead);
+            printf("[%d] Parent node u : %d index :%d\n", threadId, u, cqlocal);
             start = vertOffset[u];
             if ( u < n-1) {
                 end = vertOffset[u+1];
@@ -183,10 +209,11 @@ void bfsworker(int * vertOffset, int * edgeArr, int n, int m, int threadId){
                 int v = edgeArr[i];                
                 if (isVisited[v] == 0) {
                     
-                    pthread_mutex_lock(&queueMutex);
-                    NQ[nqhead] = v;
-                    nqhead++;
-                    pthread_mutex_unlock(&queueMutex);
+                    //pthread_mutex_lock(&queueMutex);
+                    int nqlocal = __sync_fetch_and_add(&nqhead, 1);
+                    NQ[nqlocal] = v;
+                    //nqhead++;
+                    //pthread_mutex_unlock(&queueMutex);
 
                     parentArr[v] = u;
                     distanceArr[v] = distanceArr[u]+1;
@@ -195,9 +222,13 @@ void bfsworker(int * vertOffset, int * edgeArr, int n, int m, int threadId){
                     printf("[%d] Node ignored : %d\n", threadId, v);
                 }
             }
-            isVisited[u] = 1;            
+            isVisited[u] = 1;
+            cqlocal = __sync_fetch_and_sub(&cqhead, 1);
+            cqlocal--;
         }
+#if 0
         pthread_mutex_unlock(&queueMutex);
+#endif
         printf("Wait notDone : %d ThreadId: %d\n", notDone, threadId);
         
         pthread_barrier_wait(&barrierLvl);
@@ -243,8 +274,9 @@ void parallelbfs(int * vertOffset, int * edgeArr, int n, int m, int nthreads ) {
     CQ[cqhead] = 0;
     cqhead++;
     
-
+#if 0
     pthread_mutex_init(&queueMutex, NULL);
+#endif    
     bfswrapper(vertOffset, edgeArr, n, m, nthreads);
 
 
@@ -348,14 +380,12 @@ int main ( int argc, char * argv[]){
     }
     pincore(0);
     
-    parallelbfs(vertOffset, edgeArr, n, m, nthreads);
-    
-    notDone = 0;
-   
+    parallelbfs(vertOffset, edgeArr, n, m, nthreads);    
+    notDone = 0;   
     pthread_barrier_wait(&barrierLvl2);
 
-    printf("Main thread. notDone :  %d\n", notDone);
 
+    printf("Main thread. notDone :  %d\n", notDone);
     for (int i=1; i<nthreads; i++){
         pthread_join(*(threads+i-1), NULL);
     }
@@ -371,9 +401,9 @@ int main ( int argc, char * argv[]){
     if (isVisited) free(isVisited);
     if (parentArr) free(parentArr);
     
-    //free(vertOffset);
-    //free(edgeArr);
-    //fclose(graphin);
+    free(vertOffset);
+    free(edgeArr);
+    fclose(graphin);
     
     return 0;
 }
