@@ -29,14 +29,13 @@ int cqtail = 0;
 
 int * parentArr = NULL;
 char * isVisited = NULL;
+char * isEntered = NULL;
 int * distanceArr = NULL;
 
 // Barrier
 int barrierCnt;
 pthread_mutex_t barrierMutex;
-#if 0
-pthread_mutex_t queueMutex;
-#endif
+
 pthread_barrier_t barrierInit;
 pthread_barrier_t barrierLvl;
 pthread_barrier_t barrierLvl2;
@@ -89,27 +88,18 @@ void bfswrapper(int * vertOffset, int * edgeArr, int n, int m, int nthreads){
             pthread_barrier_wait(&barrierLvl2);
             activatelvl = 0;
         }
-#if 0
-        pthread_mutex_lock(&queueMutex);
-      
-        while( cqhead > 0){        
-            u = CQ[cqhead-1];
-            cqhead--;
-            pthread_mutex_unlock(&queueMutex);
-#else
         int cqlocal = __sync_fetch_and_sub(&cqhead, 1);
         cqlocal--;
         while( cqlocal+1 > 0){        
             u = CQ[cqlocal];
 
-#endif
             if(isVisited[u] == 1) {
                 cqlocal = __sync_fetch_and_sub(&cqhead, 1);
                 cqlocal--;
                 continue;
             }
 
-            printf("[%d] Parent node u : %d index :%d\n", 0, u, cqlocal);
+            //printf("[%d] Parent node u : %d index :%d\n", 0, u, cqlocal);
             start = vertOffset[u];
             if ( u < n-1) {
                 end = vertOffset[u+1];
@@ -120,35 +110,34 @@ void bfswrapper(int * vertOffset, int * edgeArr, int n, int m, int nthreads){
             for(int i = start; i<end; i++){            
 
                 int v = edgeArr[i];                
-                if (isVisited[v] == 0) {
+                if (isVisited[v] == 0 && isEntered[v] == 0)  {
+                    isEntered[v] = 1;
                     
-                    //pthread_mutex_lock(&queueMutex);                    
+
                     int nqlocal = __sync_fetch_and_add(&nqhead, 1);
                     NQ[nqlocal] = v;
-                    //nqhead++;
-                    //pthread_mutex_unlock(&queueMutex);
                     
                     parentArr[v] = u;
                     distanceArr[v] = distanceArr[u]+1;
-                    
 
-                    printf("[%d] Node visited : %d\n", 0, v);
+
+                    assert(v < n);
+                    assert(u < n);
+                    assert(nqlocal < n);
+                    //printf("[%d] Node visited : %d\n", 0, v);
                 } else {
-                    printf("[%d] Node ignored : %d\n", 0, v);
+                    //printf("[%d] Node ignored : %d\n", 0, v);
                 }
             }
             isVisited[u] = 1;
             cqlocal = __sync_fetch_and_sub(&cqhead, 1);
             cqlocal--;
-            printf("cqhead : %d cqlocal : %d\n", cqhead, cqlocal);
+            //printf("cqhead : %d cqlocal : %d\n", cqhead, cqlocal);
         }
 
-#if 0
-        pthread_mutex_unlock(&queueMutex);
-#endif
 
         // Sync'ed
-        printf("Wait notDone : %d ThreadId: %d\n", notDone, 0);        
+        //printf("Wait notDone : %d ThreadId: %d\n", notDone, 0);        
         
         pthread_barrier_wait(&barrierLvl);
 
@@ -172,32 +161,25 @@ void bfsworker(int * vertOffset, int * edgeArr, int n, int m, int threadId){
     int u = 0;
     int start, end =0;
     
-    printf("[%d] Waiting for job\n", threadId);
+    //printf("[%d] Waiting for job\n", threadId);
     pthread_barrier_wait(&barrierInit);
 
-    printf("[%d] Enter main thread\n", threadId);
+    //printf("[%d] Enter main thread\n", threadId);
     while (notDone ){
 
-#if 0
-        pthread_mutex_lock(&queueMutex);
-        while( cqhead > 0 ){        
-            u = CQ[cqhead-1];
-            cqhead--;
-            pthread_mutex_unlock(&queueMutex);
-#else
+
         int cqlocal = __sync_fetch_and_sub(&cqhead, 1);
         cqlocal--;
         while( cqlocal+1 > 0){        
             u = CQ[cqlocal];
 
-#endif
             if(isVisited[u] == 1) {
                 cqlocal = __sync_fetch_and_sub(&cqhead, 1);
                 cqlocal--;
                 continue;
             }
 
-            printf("[%d] Parent node u : %d index :%d\n", threadId, u, cqlocal);
+            //printf("[%d] Parent node u : %d index :%d\n", threadId, u, cqlocal);
             start = vertOffset[u];
             if ( u < n-1) {
                 end = vertOffset[u+1];
@@ -207,29 +189,24 @@ void bfsworker(int * vertOffset, int * edgeArr, int n, int m, int threadId){
             
             for(int i = start; i<end; i++){            
                 int v = edgeArr[i];                
-                if (isVisited[v] == 0) {
+                if (isVisited[v] == 0 && isEntered[v] == 0) {
+                    isEntered[v] = 1;
                     
-                    //pthread_mutex_lock(&queueMutex);
                     int nqlocal = __sync_fetch_and_add(&nqhead, 1);
                     NQ[nqlocal] = v;
-                    //nqhead++;
-                    //pthread_mutex_unlock(&queueMutex);
-
+                    
                     parentArr[v] = u;
                     distanceArr[v] = distanceArr[u]+1;
-                    printf("[%d] Node visited : %d\n", threadId, v);
+                    //printf("[%d] Node visited : %d\n", threadId, v);
                 } else {
-                    printf("[%d] Node ignored : %d\n", threadId, v);
+                    //printf("[%d] Node ignored : %d\n", threadId, v);
                 }
             }
             isVisited[u] = 1;
             cqlocal = __sync_fetch_and_sub(&cqhead, 1);
             cqlocal--;
         }
-#if 0
-        pthread_mutex_unlock(&queueMutex);
-#endif
-        printf("Wait notDone : %d ThreadId: %d\n", notDone, threadId);
+        //printf("Wait notDone : %d ThreadId: %d\n", notDone, threadId);
         
         pthread_barrier_wait(&barrierLvl);
         pthread_barrier_wait(&barrierLvl2);
@@ -246,11 +223,10 @@ void* bfsScheduler (void * arg){
     int m = tds->m;
 
     pincore(threadId);        
-    printf("[%d] bfsworker\n", threadId);
+    //printf("[%d] bfsworker\n", threadId);
     bfsworker(vertOffset, edgeArr, n, m, threadId);
     
-    //free(tds);
-    printf("Thread : %d finished\n", threadId);
+    //printf("Thread : %d finished\n", threadId);
     return NULL;
 }
 
@@ -258,6 +234,7 @@ void* bfsScheduler (void * arg){
 void parallelbfs(int * vertOffset, int * edgeArr, int n, int m, int nthreads ) {    
     parentArr = calloc(n, sizeof(int));
     isVisited = calloc(n, sizeof(char));
+    isEntered = calloc(n, sizeof(char));
     distanceArr = calloc(n, sizeof(int));
     CQ = calloc(n, sizeof(int));
     NQ = calloc(n, sizeof(int));
@@ -265,6 +242,7 @@ void parallelbfs(int * vertOffset, int * edgeArr, int n, int m, int nthreads ) {
     for (int i =0; i<n; i++){
         parentArr[i] = INT_MAX;
         isVisited[i] = 0;
+        isEntered[i] = 0;
         distanceArr[i] = INT_MAX;
     }
     
@@ -274,9 +252,6 @@ void parallelbfs(int * vertOffset, int * edgeArr, int n, int m, int nthreads ) {
     CQ[cqhead] = 0;
     cqhead++;
     
-#if 0
-    pthread_mutex_init(&queueMutex, NULL);
-#endif    
     bfswrapper(vertOffset, edgeArr, n, m, nthreads);
 
 
@@ -343,7 +318,8 @@ int main ( int argc, char * argv[]){
     int m = 0; // Number of edges
     
     parseGraphIntoAdjArr(graphin, &vertOffset, &edgeArr, &n, &m);
-    
+
+#if 0    
     printf("Number of vertices : %d and edges : %d\n", n, m); 
     printf("Vertices array :");
 
@@ -358,6 +334,7 @@ int main ( int argc, char * argv[]){
         printf ("%d ", edgeArr[i]); 
     }
     printf("\n");
+#endif
 
     pthread_barrier_init(&barrierLvl, NULL, nthreads);
     pthread_barrier_init(&barrierLvl2, NULL, nthreads);
@@ -385,20 +362,24 @@ int main ( int argc, char * argv[]){
     pthread_barrier_wait(&barrierLvl2);
 
 
-    printf("Main thread. notDone :  %d\n", notDone);
+    //printf("Main thread. notDone :  %d\n", notDone);
     for (int i=1; i<nthreads; i++){
         pthread_join(*(threads+i-1), NULL);
     }
 
-    free(tds);
     
     for (int i = 0; i<n; i++) {
         printf ("Node : %d. Distance : %d Parent : %d\n", i, distanceArr[i], parentArr[i]);
     }
 
+    if(NQ) free(NQ);
+    if(CQ) free(CQ);
     
+    if(tds) free(tds);
+
     if (distanceArr) free(distanceArr);
     if (isVisited) free(isVisited);
+    if (isEntered) free(isEntered);
     if (parentArr) free(parentArr);
     
     free(vertOffset);
