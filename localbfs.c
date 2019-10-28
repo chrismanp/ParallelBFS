@@ -13,7 +13,7 @@
 
 #define GET(bitVector, location) ( ( bitVector[location/8] >> (location % 8) ) & 0x1  ) 
 
-#define GETAFFINITY (vertices, nthreads) (vertices / nthreads)  
+#define GETAFFINITY(vertices, nthreads) (vertices / nthreads)  
 
 // Next and Current level queue
 typedef struct _thread_datastructure {
@@ -25,13 +25,22 @@ typedef struct _thread_datastructure {
     int nthreads;
 } thread_ds;
 
+typedef struct _message {
+    int v;
+    int parent;
+    int dist;
+} message;
+
+
 int notDone =1;
 
 int ** NQ;
 int ** CQ;  
+message ** SQ;
 
 int * nqhead = NULL;
 int * cqhead = NULL;
+int * sqhead = NULL;
 
 int * parentArr = NULL;
 char * isVisited = NULL;
@@ -46,6 +55,17 @@ pthread_mutex_t barrierMutex;
 pthread_barrier_t barrierInit;
 pthread_barrier_t barrierLvl;
 pthread_barrier_t barrierLvl2;
+
+void enque(int owner, int vertex, int parent, int dist){
+    int sqlocal = __sync_fetch_and_add((sqhead+owner), 1);
+    message  msg;
+    msg.v=vertex;
+    msg.parent = parent;
+    msg.dist = dist;
+    SQ[owner][sqlocal] = msg;    
+}
+
+
 
 
 void waitbarrier(int * bar){
@@ -85,15 +105,6 @@ void bfsexplore(int * vertOffset, int * edgeArr, int n, int m, int threadId, int
     while( cqlocal+1 > 0){        
         u = CQ[threadId][cqlocal];
         
-        owner = GETAFFINITY(u, nthreads);
-        
-        if(owner != threadId){
-            enqueue(owner, u);
-            cqlocal = __sync_fetch_and_sub(cqhead+threadId, 1);
-            cqlocal--;
-            continue;
-        }
-
         if(isVisited[u] == 1) {
             cqlocal = __sync_fetch_and_sub(cqhead+threadId, 1);
             cqlocal--;
@@ -109,12 +120,18 @@ void bfsexplore(int * vertOffset, int * edgeArr, int n, int m, int threadId, int
         }
             
         for(int i = start; i<end; i++){            
-            int v = edgeArr[i];                
-            if (!isVisited[v] && !isEntered[v] ) {
+            int v = edgeArr[i];   
+
+            owner = GETAFFINITY(v, nthreads);
+             
+            if(owner != threadId){
+                enque(owner, v, u, distanceArr[u]+1);                
+                
+            } else if (!isVisited[v] && !isEntered[v] ) {
                 isEntered[v] = 1;
    
 
-                int nqlocal = __sync_fetch_and_add(&(nqhead+threadId), 1);
+                int nqlocal = __sync_fetch_and_add((nqhead+threadId), 1);
                 NQ[threadId][nqlocal] = v;
                     
                 parentArr[v] = u;
@@ -157,7 +174,27 @@ void mainbfs(int * vertOffset, int * edgeArr, int n, int m, int nthreads){
         bfsexplore(vertOffset, edgeArr, n, m, 0, nthreads);
       
         pthread_barrier_wait(&barrierLvl);
+        
+        while (sqhead[0]>0){
+            sqhead[0]--;
+            int v = SQ[0][sqhead[0]].v;
+            if (!isVisited[v] && !isEntered[v] ) {
+                isEntered[v] = 1;
 
+                NQ[0][nqhead[0]] = v;
+                nqhead[0]++;
+
+                parentArr[v] = SQ[0][sqhead[0]].parent;
+                distanceArr[v] = SQ[0][sqhead[0]].dist;
+
+                assert(v < n);
+                assert(parentArr[v] < n);
+                assert(nqhead[0]-1 < n/nthreads+1);
+            }
+            sqhead[0]--;
+            
+        }
+        
         int * tmp = CQ[0];
         CQ[0] = NQ[0];
         NQ[0] = tmp;
@@ -187,6 +224,29 @@ void bfsworker(int * vertOffset, int * edgeArr, int n, int m, int threadId, int 
         pthread_barrier_wait(&barrierLvl);
         // The last barrier is to ensure that CQ  and NQ are swapped and cqhead and nqhead are swapped before starting a work
 
+        while (sqhead[threadId]>0){
+            sqhead[threadId]--;
+         
+            int v = SQ[threadId][sqhead[threadId]].v;
+            if (!isVisited[v] && !isEntered[v] ) {
+                isEntered[v] = 1;
+
+                NQ[threadId][nqhead[threadId]] = v;
+                nqhead[threadId]++;
+                
+                parentArr[v] = SQ[threadId][sqhead[threadId]].parent;
+                distanceArr[v] = SQ[threadId][sqhead[threadId]].dist;
+
+                assert(v < n);
+                assert(parentArr[v] < n);
+                assert(nqhead[threadId]-1 < n/nthreads+1);
+            }
+            
+            sqhead[threadId]--;
+        }
+
+
+
         int * tmp = CQ[threadId];
         CQ[threadId] = NQ[threadId];
         NQ[threadId] = tmp;
@@ -212,8 +272,11 @@ void* bfsScheduler (void * arg){
     
     CQ[threadId] = calloc(n/nthreads+1, sizeof(int));
     NQ[threadId] = calloc(n/nthreads+1, sizeof(int));
+    SQ[threadId] = calloc(n/nthreads+1, sizeof(message));
+
     nqhead[threadId] = 0;
     cqhead[threadId] = 0;
+    sqhead[threadId] = 0;
     bfsworker(vertOffset, edgeArr, n, m, threadId, nthreads);
     
     //printf("Thread : %d finished\n", threadId);
@@ -228,6 +291,7 @@ void parallelbfs(int * vertOffset, int * edgeArr, int n, int m, int nthreads ) {
     
     nqhead = calloc(nthreads, sizeof(int));
     cqhead = calloc(nthreads, sizeof(int));
+    sqhead = calloc(nthreads, sizeof(int));
 
     //int rem = n % 8;
     //int nBytesAlloc = n/8 + !!rem;
@@ -235,14 +299,16 @@ void parallelbfs(int * vertOffset, int * edgeArr, int n, int m, int nthreads ) {
     distanceArr = calloc(n, sizeof(int));
     CQ = calloc(nthreads, sizeof(int*));
     NQ = calloc(nthreads, sizeof(int*));
-   
+    SQ = calloc(nthreads, sizeof(message*));
     
     pincore(0);
  
     CQ[0] = calloc(n/nthreads+1, sizeof(int));
     NQ[0] = calloc(n/nthreads+1, sizeof(int));
+    SQ[0] = calloc(n/nthreads+1, sizeof(message));
     nqhead[0] = 0;
     cqhead[0] = 0;
+    sqhead[0] = 0;
 
     memset(parentArr, INT_MAX, n * sizeof(int));
     memset(distanceArr, INT_MAX, n * sizeof(int));
@@ -391,11 +457,13 @@ int main ( int argc, char * argv[]){
     for(int i = 0; i<nthreads; i++){
         if(NQ[i]) free(NQ[i]);
         if(CQ[i]) free(CQ[i]);
+        if(SQ[i]) free(SQ[i]);
     }
 
     if(NQ) free(NQ);
     if(CQ) free(CQ);
-    
+    if(SQ) free(SQ);
+
     if(tds) free(tds);
 
     if (distanceArr) free(distanceArr);
@@ -406,6 +474,7 @@ int main ( int argc, char * argv[]){
     
     free(nqhead);
     free(cqhead);
+    free(sqhead);
 
     free(vertOffset);
     free(edgeArr);
