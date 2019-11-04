@@ -13,7 +13,7 @@
 
 #define GET(bitVector, location) ( ( bitVector[location/8] >> (location % 8) ) & 0x1  ) 
 
-#define GETAFFINITY(vertices, nthreads) (vertices / nthreads)  
+#define GETAFFINITY(vertices, section) (vertices / section)  
 
 // Next and Current level queue
 typedef struct _thread_datastructure {
@@ -38,13 +38,14 @@ int ** NQ;
 int ** CQ;  
 message ** SQ;
 
-int * nqhead = NULL;
-int * cqhead = NULL;
+__thread int nqhead ;
+__thread int cqhead ;
 int * sqhead = NULL;
 
 int * parentArr = NULL;
 char * isVisited = NULL;
 char * isEntered = NULL;
+char ** isQueued = NULL;
 
 int * distanceArr = NULL;
 
@@ -56,13 +57,27 @@ pthread_barrier_t barrierInit;
 pthread_barrier_t barrierLvl;
 pthread_barrier_t barrierLvl2;
 
-void enque(int owner, int vertex, int parent, int dist){
-    int sqlocal = __sync_fetch_and_add((sqhead+owner), 1);
-    message  msg;
-    msg.v=vertex;
-    msg.parent = parent;
-    msg.dist = dist;
-    SQ[owner][sqlocal] = msg;    
+void enque(int owner, int vertex, int parent, int dist, int n, int nthreads){
+    assert(owner < nthreads);
+    
+    int vertexInmod = vertex % (n/nthreads+1);
+    
+    assert(vertexInmod < n/nthreads+1);
+
+    if (! __sync_lock_test_and_set((isQueued[owner]+vertexInmod), 1)) {
+        
+        int sqlocal = __sync_fetch_and_add((sqhead+owner), 1);
+        //message  msg;
+        SQ[owner][sqlocal].v=vertex;
+        SQ[owner][sqlocal].parent = parent;
+        SQ[owner][sqlocal].dist = dist;
+        //SQ[owner][sqlocal] = msg;    
+        
+        assert(vertex < n);
+        assert(parent < n);
+        assert(owner < nthreads);
+        assert(sqlocal < n/nthreads+1);
+    }
 }
 
 
@@ -100,13 +115,13 @@ void bfsexplore(int * vertOffset, int * edgeArr, int n, int m, int threadId, int
     int u = 0;
     int start, end =0;
     int owner = 0;
-    int cqlocal = __sync_fetch_and_sub((cqhead+threadId), 1);
+    int cqlocal = cqhead; cqhead--; //__sync_fetch_and_sub((cqhead+threadId), 1);
     cqlocal--;
     while( cqlocal+1 > 0){        
         u = CQ[threadId][cqlocal];
         
         if(isVisited[u] == 1) {
-            cqlocal = __sync_fetch_and_sub(cqhead+threadId, 1);
+            cqlocal =cqhead; cqhead--;// __sync_fetch_and_sub(&cqhead, 1);
             cqlocal--;
             continue;
         }
@@ -122,24 +137,24 @@ void bfsexplore(int * vertOffset, int * edgeArr, int n, int m, int threadId, int
         for(int i = start; i<end; i++){            
             int v = edgeArr[i];   
 
-            owner = GETAFFINITY(v, nthreads);
+            owner = GETAFFINITY(v, ((n/nthreads)+1));
              
             if(owner != threadId){
-                enque(owner, v, u, distanceArr[u]+1);                
+                enque(owner, v, u, distanceArr[u]+1, n, nthreads);                
                 
             } else if (!isVisited[v] && !isEntered[v] ) {
                 isEntered[v] = 1;
    
-
-                int nqlocal = __sync_fetch_and_add((nqhead+threadId), 1);
+                int nqlocal = nqhead; nqhead++; //= __sync_fetch_and_add(&(nqhead), 1);
                 NQ[threadId][nqlocal] = v;
                     
                 parentArr[v] = u;
                 distanceArr[v] = distanceArr[u]+1;
 
+                assert(distanceArr[v] >= 0);
                 assert(v < n);
                 assert(u < n);
-                assert(nqlocal < n);
+                assert(nqlocal < n/nthreads+1);
   
 
                 //printf("[%d] Node visited : %d\n", threadId, v);
@@ -149,7 +164,7 @@ void bfsexplore(int * vertOffset, int * edgeArr, int n, int m, int threadId, int
         }
         isVisited[u] = 1;
         
-        cqlocal = __sync_fetch_and_sub(cqhead+threadId, 1);
+        cqlocal =cqhead; cqhead--;// __sync_fetch_and_sub(cqhead+threadId, 1);
         cqlocal--;
     }
 }
@@ -157,18 +172,12 @@ void bfsexplore(int * vertOffset, int * edgeArr, int n, int m, int threadId, int
 void mainbfs(int * vertOffset, int * edgeArr, int n, int m, int nthreads){
     
     int init = 0;
-    int activatelvl = 0;
-   
+    
     // Init barrier here
-    while ( cqhead[0] > 0) {        
+    while ( notDone ) {        
         if(!init){
             init = 1;
             pthread_barrier_wait(&barrierInit);
-        }
-
-        if(activatelvl){
-            pthread_barrier_wait(&barrierLvl2);
-            activatelvl = 0;
         }
 
         bfsexplore(vertOffset, edgeArr, n, m, 0, nthreads);
@@ -181,29 +190,30 @@ void mainbfs(int * vertOffset, int * edgeArr, int n, int m, int nthreads){
             if (!isVisited[v] && !isEntered[v] ) {
                 isEntered[v] = 1;
 
-                NQ[0][nqhead[0]] = v;
-                nqhead[0]++;
+                NQ[0][nqhead] = v;
+                nqhead++;
 
                 parentArr[v] = SQ[0][sqhead[0]].parent;
                 distanceArr[v] = SQ[0][sqhead[0]].dist;
-
+                
+                assert(distanceArr[v] >= 2);
                 assert(v < n);
                 assert(parentArr[v] < n);
-                assert(nqhead[0]-1 < n/nthreads+1);
-            }
-            sqhead[0]--;
-            
+                assert(nqhead-1 < n/nthreads+1);
+            }            
         }
         
         int * tmp = CQ[0];
         CQ[0] = NQ[0];
         NQ[0] = tmp;
-        cqhead[0] = nqhead[0];
-        nqhead[0] = 0;
-
-        activatelvl = 1;
-       
-                
+        cqhead = nqhead;
+        nqhead = 0;
+        
+        notDone = 0;
+        pthread_barrier_wait(&barrierLvl2);        
+        __sync_fetch_and_or(&notDone, !(cqhead == 0) );
+        pthread_barrier_wait(&barrierLvl2);
+        //printf("[%d] Notdone : %d\n", 0, notDone);
     }
 
 
@@ -231,18 +241,18 @@ void bfsworker(int * vertOffset, int * edgeArr, int n, int m, int threadId, int 
             if (!isVisited[v] && !isEntered[v] ) {
                 isEntered[v] = 1;
 
-                NQ[threadId][nqhead[threadId]] = v;
-                nqhead[threadId]++;
+                NQ[threadId][nqhead] = v;
+                nqhead++;
                 
                 parentArr[v] = SQ[threadId][sqhead[threadId]].parent;
                 distanceArr[v] = SQ[threadId][sqhead[threadId]].dist;
-
+                
+                assert(distanceArr[v] >= 0);
                 assert(v < n);
                 assert(parentArr[v] < n);
-                assert(nqhead[threadId]-1 < n/nthreads+1);
+                assert(nqhead-1 < n/nthreads+1);
             }
             
-            sqhead[threadId]--;
         }
 
 
@@ -250,10 +260,13 @@ void bfsworker(int * vertOffset, int * edgeArr, int n, int m, int threadId, int 
         int * tmp = CQ[threadId];
         CQ[threadId] = NQ[threadId];
         NQ[threadId] = tmp;
-        cqhead[threadId] = nqhead[threadId];
-        nqhead[threadId] = 0;
-
+        cqhead = nqhead;
+        nqhead = 0;
+       
         pthread_barrier_wait(&barrierLvl2);
+        __sync_fetch_and_or(&notDone, !(cqhead == 0) );
+        pthread_barrier_wait(&barrierLvl2);
+        //printf("[%d] Notdone : %d\n", 0, notDone);
     }
     
 }
@@ -269,13 +282,25 @@ void* bfsScheduler (void * arg){
 
     pincore(threadId);        
     //printf("[%d] bfsworker\n", threadId);
+
+#if 1
     
     CQ[threadId] = calloc(n/nthreads+1, sizeof(int));
     NQ[threadId] = calloc(n/nthreads+1, sizeof(int));
     SQ[threadId] = calloc(n/nthreads+1, sizeof(message));
+    isQueued[threadId] = calloc(n/nthreads+1, sizeof(char));
+    memset(isQueued[threadId], 0, (n/nthreads+1) * sizeof(char));
 
-    nqhead[threadId] = 0;
-    cqhead[threadId] = 0;
+#else
+
+    CQ[threadId] = calloc(n+1, sizeof(int));
+    NQ[threadId] = calloc(n+1, sizeof(int));
+    SQ[threadId] = calloc(n+1, sizeof(message));
+
+#endif
+
+    nqhead = 0;
+    cqhead = 0;
     sqhead[threadId] = 0;
     bfsworker(vertOffset, edgeArr, n, m, threadId, nthreads);
     
@@ -289,8 +314,10 @@ void parallelbfs(int * vertOffset, int * edgeArr, int n, int m, int nthreads ) {
     isVisited = calloc(n, sizeof(char));
     isEntered = calloc(n, sizeof(char));
     
-    nqhead = calloc(nthreads, sizeof(int));
-    cqhead = calloc(nthreads, sizeof(int));
+    isQueued = calloc(nthreads, sizeof(char*));
+
+    //nqhead = calloc(nthreads, sizeof(int));
+    //cqhead = calloc(nthreads, sizeof(int));
     sqhead = calloc(nthreads, sizeof(int));
 
     //int rem = n % 8;
@@ -301,25 +328,29 @@ void parallelbfs(int * vertOffset, int * edgeArr, int n, int m, int nthreads ) {
     NQ = calloc(nthreads, sizeof(int*));
     SQ = calloc(nthreads, sizeof(message*));
     
+    // Has a barrier here
     pincore(0);
  
     CQ[0] = calloc(n/nthreads+1, sizeof(int));
     NQ[0] = calloc(n/nthreads+1, sizeof(int));
     SQ[0] = calloc(n/nthreads+1, sizeof(message));
-    nqhead[0] = 0;
-    cqhead[0] = 0;
+    isQueued[0] = calloc(n/nthreads+1, sizeof(char));
+
+    nqhead = 0;
+    cqhead = 0;
     sqhead[0] = 0;
 
     memset(parentArr, INT_MAX, n * sizeof(int));
     memset(distanceArr, INT_MAX, n * sizeof(int));
     memset(isVisited, 0, n * sizeof(char));
     memset(isEntered, 0, n * sizeof(char));
+    memset(isQueued[0], 0, (n/nthreads+1) * sizeof(char));
 
     parentArr[0] = 0;
     distanceArr[0] = 0;
 
-    CQ[cqhead[0]] = 0;
-    cqhead[0]++;
+    CQ[0][cqhead] = 0;
+    cqhead++;
     
     mainbfs(vertOffset, edgeArr, n, m, nthreads);
 
@@ -437,32 +468,30 @@ int main ( int argc, char * argv[]){
     time_taken = (end.tv_sec - start.tv_sec) * 1e9; 
     time_taken = (time_taken + (end.tv_nsec - start.tv_nsec)) * 1e-9; 
  
-
-    notDone = 0;   
-    pthread_barrier_wait(&barrierLvl2);
-
     //printf("Main thread. notDone :  %d\n", notDone);
     for (int i=1; i<nthreads; i++){
         pthread_join(*(threads+i-1), NULL);
     }
 
-    
+#if 0
     for (int i = 0; i<n; i++) {
         //printf ("Node : %d. Distance : %d Parent : %d\n", i, distanceArr[i], parentArr[i]);
         printf ("Node : %d. Distance : %d\n", i, distanceArr[i]);
     }
-
+#endif
     printf("Time taken : %0.9lf s\n", time_taken);
 
     for(int i = 0; i<nthreads; i++){
         if(NQ[i]) free(NQ[i]);
         if(CQ[i]) free(CQ[i]);
         if(SQ[i]) free(SQ[i]);
+        if(isQueued[i]) free(isQueued[i]);
     }
 
     if(NQ) free(NQ);
     if(CQ) free(CQ);
     if(SQ) free(SQ);
+    if(isQueued) free(isQueued);
 
     if(tds) free(tds);
 
@@ -471,9 +500,9 @@ int main ( int argc, char * argv[]){
     if (isEntered) free(isEntered);
 
     if (parentArr) free(parentArr);
-    
-    free(nqhead);
-    free(cqhead);
+
+    //free(nqhead);
+    //free(cqhead);
     free(sqhead);
 
     free(vertOffset);

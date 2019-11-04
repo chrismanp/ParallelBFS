@@ -7,6 +7,9 @@
 #include <limits.h>
 #include <pthread.h>
 
+// Use for bitmap-based isVisited and isEntered
+// __sync_or_and_fetch
+
 #define SET(bitVector, location) ( bitVector[location/8] = bitVector[location/8] | ((char) 1 << (location % 8) ) )
 
 #define CLEAR(bitVector, location) ( bitVector[location/8] = bitVector[location/8] & !((char) 1 << (location % 8) ) )
@@ -36,7 +39,6 @@ int cqtail = 0;
 int * parentArr = NULL;
 char * isVisited = NULL;
 char * isEntered = NULL;
-
 int * distanceArr = NULL;
 
 // Barrier
@@ -77,7 +79,7 @@ void pincore(int threadId){
     waitbarrier(&barrierCnt);
 }
 
-void bfsexplore(int * vertOffset, int * edgeArr, int n, int m, int nthreads){
+void bfsexplore(int * vertOffset, int * edgeArr, int n, int m, int threadId){
     int u = 0;
     int start, end =0;
     
@@ -347,12 +349,13 @@ int main ( int argc, char * argv[]){
         pthread_join(*(threads+i-1), NULL);
     }
 
+#if 0
     
     for (int i = 0; i<n; i++) {
         //printf ("Node : %d. Distance : %d Parent : %d\n", i, distanceArr[i], parentArr[i]);
         printf ("Node : %d. Distance : %d\n", i, distanceArr[i]);
     }
-
+#endif
     printf("Time taken : %0.9lf s\n", time_taken);
 
     if(NQ) free(NQ);

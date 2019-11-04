@@ -36,14 +36,18 @@ using namespace std;
 // **************************************************************
 
 pair<intT,intT> BFS(intT start, graph<intT> GA) {
+  static int test = 0;
+
   intT numVertices = GA.n;
   intT numEdges = GA.m;
   vertex<intT> *G = GA.V;
   intT* Frontier = newA(intT,numEdges);
   intT* Visited = newA(intT,numVertices);
-  for (intT i = 0; i < numVertices; i++) 
+  intT* Distance = newA(intT,numVertices);
+  for (intT i = 0; i < numVertices; i++){ 
     Visited[i] = 0;
-
+    Distance[i] = 0;
+  }
   intT bot = 0;
   intT top = 1;
   Frontier[0] = start;
@@ -55,13 +59,21 @@ pair<intT,intT> BFS(intT start, graph<intT> GA) {
     for (intT j=0; j < G[v].degree; j++) {
       intT ngh = G[v].Neighbors[j];
       if (Visited[ngh] == 0) {
-	Frontier[top++] = G[v].Neighbors[k++] = ngh;
-	Visited[ngh] = 1;
+          Frontier[top++] = G[v].Neighbors[k++] = ngh;
+          Visited[ngh] = 1;
+          Distance[ngh] = Distance[v]+1;
       }
     }
     G[v].degree = k;
   }
-
+#if 1  
+  if (!test){
+      for(int i =0; i<numVertices;i++){
+          cout << "Node : " <<  i << ". Distance : " << Distance[i] << "\n";
+      }
+      test = 1;
+  }
+#endif
   free(Frontier); free(Visited);
   return pair<intT,intT>(0,0);
 }
